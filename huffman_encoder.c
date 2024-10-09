@@ -18,6 +18,11 @@ typedef struct {
     int size;
 } priority_queue;
 
+typedef struct {
+    char code[ASCII_TABLE_SIZE];
+    char character;
+} character_code;
+
 int *frequency_table;
 FILE *input_file;
 FILE *output_file;
@@ -25,6 +30,17 @@ FILE *output_file;
 void print_help_message() {
     fprintf(stderr, "To properly use this executable you should call:\n./executable <encode/decode> <InputFile> <OutputFile>\n");
 }
+void free_huffman_tree(huffman_node *node) {
+    if (node == NULL) {
+        return;
+    }
+
+    free_huffman_tree(node->left);
+    free_huffman_tree(node->right);
+
+    free(node);
+}
+
 void swap_nodes(huffman_node *a, huffman_node *b) {
     huffman_node temp = *a;
     *a = *b;
@@ -68,9 +84,12 @@ huffman_node dequeue(priority_queue *queue) {
     huffman_node node = queue->items[0];
     queue->items[0] = queue->items[--queue->size];
     heapify_down(queue, 0);
+
+    queue->items[queue->size] = (huffman_node){0};
+
     return node;
 }
-huffman_node peek(priority_queue *queue) {
+huffman_node peek(const priority_queue *queue) {
     if (!queue->size) {
         return (huffman_node) {0};
     }
@@ -127,25 +146,59 @@ int *create_frequency_table(FILE *input_file) {
 
     return table;
 }
-void create_huffman_tree(priority_queue *queue) {
+huffman_node* create_huffman_tree(priority_queue *queue) {
     while (queue->size > 1) {
-        huffman_node lowest = dequeue(queue);
-        huffman_node second_lowest = dequeue(queue);
-        huffman_node new_node = {'\0', lowest.frequency + second_lowest.frequency, &lowest, &second_lowest};
-        enqueue(queue, new_node);
+        huffman_node *lowest = malloc(sizeof(huffman_node));
+        *lowest = dequeue(queue);
+
+        huffman_node *second_lowest = malloc(sizeof(huffman_node));
+        *second_lowest = dequeue(queue);
+
+        huffman_node *new_node = malloc(sizeof(huffman_node));
+        new_node->character = '\0';
+        new_node->frequency = lowest->frequency + second_lowest->frequency;
+        new_node->left = lowest;
+        new_node->right = second_lowest;
+
+        enqueue(queue, *new_node);
+    }
+
+    huffman_node *root = malloc(sizeof(huffman_node));
+    *root = dequeue(queue);
+    return root;
+}
+void create_code_table(const huffman_node *node, char code_table[][ASCII_TABLE_SIZE], char *current_code, int depth) {
+    if (node->character != '\0') {
+        current_code[depth] = '\0';
+        strcpy(code_table[(unsigned char) node->character], current_code);
+        return;
+    }
+
+    if (node->left != NULL) {
+        current_code[depth] = '0';
+        create_code_table(node->left, code_table, current_code, depth + 1);
+    }
+
+    if (node->right != NULL) {
+        current_code[depth] = '1';
+        create_code_table(node->right, code_table, current_code, depth + 1);
     }
 }
+void write_encoded_file(char[][ASCII_TABLE_SIZE], FILE *output_file, FILE *input_file) {
 
+}
 
 int huffman_encode(FILE *input_file, FILE *output_file) {
     priority_queue *queue = malloc(sizeof(priority_queue));
     if (queue == NULL) {
         return 1;
     }
+
     frequency_table = create_frequency_table(input_file);
     if (frequency_table == NULL) {
         return 1;
     }
+
     for(int i = 0; i<ASCII_TABLE_SIZE; i++) {
         if(frequency_table[i] > 0) {
             huffman_node node = {i, frequency_table[i], NULL, NULL};
@@ -154,10 +207,20 @@ int huffman_encode(FILE *input_file, FILE *output_file) {
     }
     free(frequency_table);
 
-    create_huffman_tree(queue);
-    huffman_node root = dequeue(queue);
+    huffman_node *root = create_huffman_tree(queue);
     free(queue);
 
+    char code_table[ASCII_TABLE_SIZE][ASCII_TABLE_SIZE] = {{0}};
+    char current_code[ASCII_TABLE_SIZE];
+    create_code_table(root, code_table, current_code,0);
+    for (int i = 0; i < ASCII_TABLE_SIZE; i++) {
+        if(code_table[i][0] != '\0') {
+            printf("%c - %s\n",(char) i,code_table[i]);
+        }
+    }
+    free_huffman_tree(root);
+
+    write_encoded_file(code_table, output_file, input_file);
 
 
     fclose(input_file);
