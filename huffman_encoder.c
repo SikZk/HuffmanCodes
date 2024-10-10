@@ -4,6 +4,7 @@
 
 #define REQUIRED_ARGUMENTS_NUMBER 3
 #define ASCII_TABLE_SIZE 256
+#define METADATA_MARKER "---METADATA_SECTION---"
 
 
 typedef struct huffman_node {
@@ -23,9 +24,76 @@ typedef struct {
     char character;
 } character_code;
 
+typedef struct data_item {
+    char data;
+    char key[ASCII_TABLE_SIZE];
+} data_item;
+
 int *frequency_table;
 FILE *input_file;
 FILE *output_file;
+data_item *hash_array[ASCII_TABLE_SIZE];
+data_item *dummy_item;
+data_item *item;
+
+int hash_code(char code[ASCII_TABLE_SIZE]) {
+    unsigned int hash = 0;
+    for (int i = 0; code[i] != '\0'; i++) {
+        hash = (hash * 31 + code[i]) % ASCII_TABLE_SIZE;
+    }
+    return hash;
+}
+data_item *search(char key[ASCII_TABLE_SIZE]) {
+    int hash_index = hash_code(key);
+    int original_index = hash_index;
+    while (hash_array[hash_index] != NULL) {
+        if (strcmp(hash_array[hash_index]->key, key) == 0) {
+            return hash_array[hash_index];
+        }
+        ++hash_index;
+        hash_index %= ASCII_TABLE_SIZE;
+        if (hash_index == original_index) {
+            break;
+        }
+    }
+    return NULL;
+}
+
+void insert_to_hash_table(char key[ASCII_TABLE_SIZE], char data) {
+    data_item *item = malloc(sizeof(data_item));
+    item->data = data;
+    strcpy(item->key, key);
+
+    int hash_index = hash_code(key);
+    int original_index = hash_index;
+    while (hash_array[hash_index] != NULL) {
+        ++hash_index;
+        hash_index %= ASCII_TABLE_SIZE;
+        if (hash_index == original_index) {
+            fprintf(stderr, "Hash table is full\n");
+            free(item);
+            return;
+        }
+    }
+    hash_array[hash_index] = item;
+}
+
+data_item *delete_to_hash_table(data_item *item) {
+    char *key = item->key;
+    int hash_index = hash_code(key);
+
+    while(hash_array[hash_index] != NULL) {
+        if(hash_array[hash_index]->key == key) {
+            data_item *temp = hash_array[hash_index];
+            hash_array[hash_index] = dummy_item;
+            return temp;
+        }
+        ++hash_index;
+        hash_index %= ASCII_TABLE_SIZE;
+    }
+    return NULL;
+}
+
 
 void print_help_message() {
     fprintf(stderr, "To properly use this executable you should call:\n./executable <encode/decode> <InputFile> <OutputFile>\n");
@@ -114,7 +182,7 @@ int validate_txt_file(const char *file_path) {
     return 0;
 
 }
-int validate_huff_file(const char *file_path) {
+int validate_huff_file(const char *file_path, int mode) {
 
     const char *dot = strrchr(file_path, '.');
     if(!dot || dot == file_path) {
@@ -123,8 +191,12 @@ int validate_huff_file(const char *file_path) {
     if (strcmp(dot, ".huff") != 0) {
         return 1;
     }
-
-    output_file = fopen(file_path, "w");
+    if (mode == 0) {
+        output_file = fopen(file_path, "w");
+    }
+    else {
+        output_file = fopen(file_path, "a+");
+    }
     if(output_file == NULL) {
         perror("Error opening .huff file");
         return 1;
@@ -184,10 +256,23 @@ void create_code_table(const huffman_node *node, char code_table[][ASCII_TABLE_S
         create_code_table(node->right, code_table, current_code, depth + 1);
     }
 }
-void write_encoded_file(char[][ASCII_TABLE_SIZE], FILE *output_file, FILE *input_file) {
+void write_encoded_file(char code_table[][ASCII_TABLE_SIZE], FILE *output_file, FILE *input_file) {
+    rewind(input_file);
 
+    int ch;
+    while ((ch = fgetc(input_file)) != EOF) {
+        char *code = code_table[(unsigned char)ch];
+        fputs(code, output_file);
+    }
+
+    fprintf(output_file,"\n%s\n", METADATA_MARKER);
+
+    for (int i = 0; i < ASCII_TABLE_SIZE; i++) {
+        if (code_table[i][0] != '\0') {
+            fprintf(output_file, "%c:%s\n", (char) i, code_table[i]);
+        }
+    }
 }
-
 int huffman_encode(FILE *input_file, FILE *output_file) {
     priority_queue *queue = malloc(sizeof(priority_queue));
     if (queue == NULL) {
@@ -213,11 +298,6 @@ int huffman_encode(FILE *input_file, FILE *output_file) {
     char code_table[ASCII_TABLE_SIZE][ASCII_TABLE_SIZE] = {{0}};
     char current_code[ASCII_TABLE_SIZE];
     create_code_table(root, code_table, current_code,0);
-    for (int i = 0; i < ASCII_TABLE_SIZE; i++) {
-        if(code_table[i][0] != '\0') {
-            printf("%c - %s\n",(char) i,code_table[i]);
-        }
-    }
     free_huffman_tree(root);
 
     write_encoded_file(code_table, output_file, input_file);
@@ -227,13 +307,72 @@ int huffman_encode(FILE *input_file, FILE *output_file) {
     fclose(output_file);
     return 0;
 }
+int huffman_decode(FILE *huffman_file) {
 
+    fseek(huffman_file, 0, SEEK_END);
+    long file_size = ftell(huffman_file);
+    rewind(huffman_file);
+
+    char *file_buffer = malloc(file_size + 1);
+    if (file_buffer == NULL) {
+        perror("Memory allocation failed");
+        return 1;
+    }
+
+    size_t bytes_read = fread(file_buffer, 1, file_size, huffman_file);
+    file_buffer[bytes_read] = '\0';
+
+    char *metadata_marker = strstr(file_buffer, "\n" METADATA_MARKER "\n");
+    if (metadata_marker == NULL) {
+        fprintf(stderr, "Metadata marker not found in the file\n");
+        free(file_buffer);
+        return 1;
+    }
+
+    long encoded_data_length = metadata_marker - file_buffer;
+    char *encoded_data = file_buffer;
+
+    char *metadata_section = metadata_marker + strlen("\n" METADATA_MARKER "\n");
+    char *line = strtok(metadata_section, "\n");
+    while (line != NULL) {
+        char *colon = strchr(line, ':');
+        if (colon != NULL) {
+            char character = line[0];
+            char *code = colon + 1;
+            insert_to_hash_table(code, character);
+        }
+        line = strtok(NULL, "\n");
+    }
+    FILE *output = fopen("decoded.txt", "w");
+    char bit_buffer[ASCII_TABLE_SIZE] = {0};
+    int bit_buffer_index = 0;
+    for (long i = 0; i < encoded_data_length; i++) {
+        char bit_char = encoded_data[i];
+        if (bit_char != '0' && bit_char != '1') {
+            continue;
+        }
+        bit_buffer[bit_buffer_index++] = bit_char;
+        bit_buffer[bit_buffer_index] = '\0';
+
+        data_item *item = search(bit_buffer);
+        if (item != NULL) {
+            fprintf(output,"%c", item->data);
+
+            bit_buffer_index = 0;
+            bit_buffer[0] = '\0';
+        }
+    }
+    printf("\n");
+
+    free(file_buffer);
+    return 0;
+}
 
 
 
 int main(const int argc, char *argv[]) {
 
-    if(argc != REQUIRED_ARGUMENTS_NUMBER+1) {
+    if(argc != REQUIRED_ARGUMENTS_NUMBER+1 && argc != REQUIRED_ARGUMENTS_NUMBER ) {
         print_help_message();
         return 1;
     }
@@ -244,7 +383,7 @@ int main(const int argc, char *argv[]) {
             fprintf(stderr, "The file extension is invalid, or the file does not exist, you need to add .txt file\n");
             return 1;
         }
-        if(validate_huff_file(argv[3]) != 0) {
+        if(validate_huff_file(argv[3],0) != 0) {
             fprintf(stderr, "The output file is not a valid .huff file\n");
             return 1;
         }
@@ -257,13 +396,12 @@ int main(const int argc, char *argv[]) {
 
     } else if(strcmp(argv[1], "decode") == 0) {
 
-        if(validate_huff_file(argv[2]) != 0) {
+        if(validate_huff_file(argv[2], 1) != 0) {
             fprintf(stderr, "The output file is not a valid .huff file\n");
             return 1;
         }
-
-        if(validate_txt_file(argv[3]) != 0) {
-            fprintf(stderr, "The file extension is invalid, or the file does not exist, you need to add .txt file\n");
+        if(huffman_decode(output_file) != 0) {
+            fprintf(stderr, "Error decodeing the file\n");
             return 1;
         }
 

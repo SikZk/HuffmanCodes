@@ -9,5 +9,9 @@ Huffman encoding provides the most efficient way to compress data, from a theore
 To understand the Huffman coding algorithm, I used the following resources:
 
 https://www.youtube.com/watch?v=B3y0RsVCyrw
+
 https://www.youtube.com/watch?v=lAyhKaclsPM
+
 https://www.geeksforgeeks.org/priority-queue-set-1-introduction/
+
+https://www.geeksforgeeks.org/huffman-coding-greedy-algo-3/
